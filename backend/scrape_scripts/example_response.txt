@@ -1,0 +1,8 @@
+# TYPE temperature_celsius gauge
+# UNIT temperature_celsius celsius
+# HELP temperature_celsius Current room temperatures
+temperature_celsius{sensor="ASIC_SENSOR"} 22.1
+temperature_celsius{sensor="Right Fan"} 18.4
+temperature_celsius{sensor="Left Fan"} 24.0
+# EOF
+
