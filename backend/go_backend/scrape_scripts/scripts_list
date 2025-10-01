@@ -1,3 +1,4 @@
 scrape_scripts/temperature_script.sh
 scrape_scripts/docker_script.sh
 scrape_scripts/memory_script.sh
+scrape_scripts/cpu_script.sh

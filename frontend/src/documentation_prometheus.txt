@@ -1,0 +1,434 @@
+SONiC Dashboard - Prometheus Direct Integration Documentation
+==============================================================
+
+Overview:
+This SONiC dashboard can integrate directly with Prometheus for real-time monitoring data,
+bypassing Grafana and connecting straight to the Prometheus API. This approach provides
+faster data access and reduced latency for time-sensitive monitoring applications.
+
+Prometheus API Configuration:
+============================
+
+1. Prometheus Server Setup:
+   - Ensure Prometheus server is running and accessible
+   - Configure proper CORS headers if accessing from different domain
+   - Verify API is enabled (--web.enable-api flag)
+   - Ensure proper authentication if required
+
+2. Environment Variables:
+   Add these to your environment configuration:
+   
+   PROMETHEUS_BASE_URL=http://your-prometheus-server:9090
+   PROMETHEUS_API_TOKEN=your_token_here (if authentication enabled)
+   
+3. Device Label Structure:
+   Prometheus metrics should use consistent labeling:
+   
+   Temperature metrics: sonic_temperature{device="sonic-sw-01", sensor="temp1"}
+   Memory metrics: sonic_memory_used_bytes{device="sonic-sw-01"}
+   CPU metrics: sonic_cpu_usage_percent{device="sonic-sw-01"}
+   Process metrics: sonic_process_uptime{device="sonic-sw-01", process="syncd"}
+
+Prometheus Query Structure:
+==========================
+
+Base API Endpoint: ${PROMETHEUS_BASE_URL}/api/v1/query_range
+
+Query Parameters:
+- query: PromQL query string
+- start: Start timestamp (Unix time)
+- end: End timestamp (Unix time)  
+- step: Query resolution step width (e.g., "30s")
+
+Device-specific PromQL Queries:
+===============================
+
+1. Temperature Data:
+   Query: sonic_temperature{device="{DEVICE_NAME}"}
+   Example: sonic_temperature{device="sonic-sw-01"}
+   
+   Full URL Example:
+   http://prometheus:9090/api/v1/query_range?query=sonic_temperature{device="sonic-sw-01"}&start=1640995200&end=1640998800&step=300s
+
+2. Memory Usage Data:
+   Queries:
+   - Used Memory: sonic_memory_used_bytes{device="{DEVICE_NAME}"}
+   - Total Memory: sonic_memory_total_bytes{device="{DEVICE_NAME}"}
+   
+   Example Combined Query:
+   (sonic_memory_used_bytes{device="sonic-sw-01"} / sonic_memory_total_bytes{device="sonic-sw-01"}) * 100
+
+3. CPU Usage Data:
+   Query: sonic_cpu_usage_percent{device="{DEVICE_NAME}"}
+   Example: sonic_cpu_usage_percent{device="sonic-sw-01"}
+   
+   For average across cores:
+   avg by (device) (sonic_cpu_usage_percent{device="sonic-sw-01"})
+
+4. Process Uptime Data:
+   Query: sonic_process_uptime{device="{DEVICE_NAME}"}
+   Example: sonic_process_uptime{device="sonic-sw-01"}
+   
+   For specific process:
+   sonic_process_uptime{device="sonic-sw-01", process="syncd"}
+
+Expected Prometheus Response Format:
+===================================
+
+Standard Prometheus API response structure:
+```json
+{
+  "status": "success",
+  "data": {
+    "resultType": "matrix",
+    "result": [
+      {
+        "metric": {
+          "device": "sonic-sw-01",
+          "sensor": "temp1"
+        },
+        "values": [
+          [1640995200, "45.2"],
+          [1640995500, "46.1"],
+          [1640995800, "45.8"]
+        ]
+      }
+    ]
+  }
+}
+```
+
+Data Transformation Examples:
+============================
+
+1. Temperature Data Transformation:
+```typescript
+const transformTemperatureData = (prometheusResponse: any) => {
+  const result = prometheusResponse.data.result[0];
+  return result.values.map(([timestamp, value]: [number, string]) => ({
+    time: new Date(timestamp * 1000).toLocaleTimeString('en-US', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    }),
+    temp: parseFloat(value)
+  }));
+};
+```
+
+2. Memory Data Transformation:
+```typescript
+const transformMemoryData = (usedResponse: any, totalResponse: any) => {
+  const usedValues = usedResponse.data.result[0].values;
+  const totalValues = totalResponse.data.result[0].values;
+  
+  return usedValues.map(([timestamp, usedValue]: [number, string], index: number) => {
+    const totalValue = parseFloat(totalValues[index][1]);
+    const used = parseFloat(usedValue);
+    
+    return {
+      time: new Date(timestamp * 1000).toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit' 
+      }),
+      used: used / (1024 * 1024 * 1024), // Convert bytes to GB
+      available: (totalValue - used) / (1024 * 1024 * 1024)
+    };
+  });
+};
+```
+
+Implementation Service:
+======================
+
+Create /services/prometheusService.ts:
+
+```typescript
+interface PrometheusConfig {
+  baseUrl: string;
+  apiToken?: string;
+}
+
+class PrometheusService {
+  private config: PrometheusConfig;
+
+  constructor(config: PrometheusConfig) {
+    this.config = config;
+  }
+
+  private async makeRequest(endpoint: string, params: URLSearchParams) {
+    const url = `${this.config.baseUrl}${endpoint}?${params.toString()}`;
+    const headers: HeadersInit = {
+      'Content-Type': 'application/json',
+    };
+
+    if (this.config.apiToken) {
+      headers['Authorization'] = `Bearer ${this.config.apiToken}`;
+    }
+
+    const response = await fetch(url, { headers });
+    
+    if (!response.ok) {
+      throw new Error(`Prometheus API error: ${response.status}`);
+    }
+    
+    return response.json();
+  }
+
+  async queryRange(query: string, start: number, end: number, step: string = '300s') {
+    const params = new URLSearchParams({
+      query,
+      start: start.toString(),
+      end: end.toString(),
+      step
+    });
+
+    return this.makeRequest('/api/v1/query_range', params);
+  }
+
+  async getTemperatureData(deviceName: string, timeRange: { start: number, end: number }) {
+    const query = `sonic_temperature{device="${deviceName}"}`;
+    return this.queryRange(query, timeRange.start, timeRange.end);
+  }
+
+  async getMemoryData(deviceName: string, timeRange: { start: number, end: number }) {
+    const usedQuery = `sonic_memory_used_bytes{device="${deviceName}"}`;
+    const totalQuery = `sonic_memory_total_bytes{device="${deviceName}"}`;
+    
+    const [usedResponse, totalResponse] = await Promise.all([
+      this.queryRange(usedQuery, timeRange.start, timeRange.end),
+      this.queryRange(totalQuery, timeRange.start, timeRange.end)
+    ]);
+
+    return { used: usedResponse, total: totalResponse };
+  }
+
+  async getCpuData(deviceName: string, timeRange: { start: number, end: number }) {
+    const query = `avg by (device) (sonic_cpu_usage_percent{device="${deviceName}"})`;
+    return this.queryRange(query, timeRange.start, timeRange.end);
+  }
+
+  async getProcessUptimeData(deviceName: string, timeRange: { start: number, end: number }) {
+    const query = `sonic_process_uptime{device="${deviceName}"}`;
+    return this.queryRange(query, timeRange.start, timeRange.end);
+  }
+}
+
+// Usage example:
+const prometheusService = new PrometheusService({
+  baseUrl: process.env.PROMETHEUS_BASE_URL || 'http://localhost:9090',
+  apiToken: process.env.PROMETHEUS_API_TOKEN
+});
+
+export default prometheusService;
+```
+
+React Hook for Data Fetching:
+=============================
+
+Create /hooks/usePrometheusData.ts:
+
+```typescript
+import { useState, useEffect } from 'react';
+import prometheusService from '../services/prometheusService';
+
+export const usePrometheusData = (deviceName: string, metricType: string, refreshInterval: number = 30000) => {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const end = Math.floor(Date.now() / 1000);
+        const start = end - (24 * 60 * 60); // Last 24 hours
+
+        let response;
+        switch (metricType) {
+          case 'temperature':
+            response = await prometheusService.getTemperatureData(deviceName, { start, end });
+            break;
+          case 'memory':
+            response = await prometheusService.getMemoryData(deviceName, { start, end });
+            break;
+          case 'cpu':
+            response = await prometheusService.getCpuData(deviceName, { start, end });
+            break;
+          case 'uptime':
+            response = await prometheusService.getProcessUptimeData(deviceName, { start, end });
+            break;
+          default:
+            throw new Error(`Unknown metric type: ${metricType}`);
+        }
+
+        setData(response);
+        setError(null);
+      } catch (err) {
+        setError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, refreshInterval);
+
+    return () => clearInterval(interval);
+  }, [deviceName, metricType, refreshInterval]);
+
+  return { data, loading, error };
+};
+```
+
+PromQL Query Examples:
+=====================
+
+1. Advanced Temperature Queries:
+   - Current temperature: sonic_temperature{device="sonic-sw-01"}
+   - Temperature over threshold: sonic_temperature{device="sonic-sw-01"} > 60
+   - Average temperature: avg(sonic_temperature{device="sonic-sw-01"})
+   - Temperature rate of change: rate(sonic_temperature{device="sonic-sw-01"}[5m])
+
+2. Memory Usage Queries:
+   - Memory usage percentage: (sonic_memory_used_bytes / sonic_memory_total_bytes) * 100
+   - Available memory: sonic_memory_total_bytes - sonic_memory_used_bytes
+   - Memory usage trend: increase(sonic_memory_used_bytes[1h])
+
+3. CPU Usage Queries:
+   - CPU usage by core: sonic_cpu_usage_percent{device="sonic-sw-01"}
+   - Average CPU: avg(sonic_cpu_usage_percent{device="sonic-sw-01"})
+   - CPU usage over time: rate(sonic_cpu_usage_percent[5m])
+
+4. Process Monitoring Queries:
+   - All processes uptime: sonic_process_uptime{device="sonic-sw-01"}
+   - Critical process check: sonic_process_uptime{device="sonic-sw-01", process=~"syncd|orchagent|bgpd"}
+   - Process restart detection: resets(sonic_process_uptime[1h])
+
+Metric Exporters Configuration:
+==============================
+
+1. SONiC Device Exporter Configuration:
+   Configure on each SONiC device to export metrics to Prometheus:
+
+   ```yaml
+   # sonic-exporter.yml
+   global:
+     scrape_interval: 30s
+   
+   scrape_configs:
+     - job_name: 'sonic-devices'
+       static_configs:
+         - targets:
+           - 'sonic-sw-01:9100'
+           - 'sonic-sw-02:9100'
+           - 'sonic-sw-03:9100'
+           - 'sonic-sw-04:9100'
+       metrics_path: /metrics
+       scrape_interval: 30s
+   ```
+
+2. Custom Metrics for SONiC:
+   Temperature: sonic_temperature (gauge)
+   Memory: sonic_memory_used_bytes, sonic_memory_total_bytes (gauge)
+   CPU: sonic_cpu_usage_percent (gauge)
+   Processes: sonic_process_uptime (gauge)
+
+Error Handling and Retry Logic:
+==============================
+
+```typescript
+class PrometheusError extends Error {
+  constructor(public statusCode: number, message: string) {
+    super(message);
+    this.name = 'PrometheusError';
+  }
+}
+
+const fetchWithRetry = async (url: string, options: RequestInit, maxRetries: number = 3) => {
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      const response = await fetch(url, options);
+      
+      if (response.status === 429) {
+        // Rate limited, wait and retry
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, i) * 1000));
+        continue;
+      }
+      
+      if (!response.ok) {
+        throw new PrometheusError(response.status, `HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return response;
+    } catch (error) {
+      if (i === maxRetries) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * i));
+    }
+  }
+};
+```
+
+Performance Optimization:
+========================
+
+1. Query Optimization:
+   - Use appropriate step sizes (smaller for real-time, larger for historical)
+   - Limit time ranges to necessary data
+   - Use recording rules for complex calculations
+
+2. Caching Strategy:
+   - Implement client-side caching for recent data
+   - Use stale-while-revalidate pattern
+   - Cache transformed data to avoid reprocessing
+
+3. Batch Requests:
+   - Combine multiple metrics in single requests where possible
+   - Use Promise.all for parallel requests
+   - Implement request queuing for rate limiting
+
+Security Considerations:
+=======================
+
+1. Authentication:
+   - Use bearer tokens for API authentication
+   - Implement proper CORS configuration
+   - Rotate tokens regularly
+
+2. Network Security:
+   - Use HTTPS for production deployments
+   - Implement proper firewall rules
+   - Consider VPN access for sensitive monitoring data
+
+3. Data Privacy:
+   - Avoid logging sensitive metric values
+   - Implement proper access controls
+   - Consider data retention policies
+
+Monitoring and Alerting:
+=======================
+
+1. Dashboard Health Monitoring:
+   - Track API response times
+   - Monitor error rates
+   - Alert on connection failures
+
+2. Data Quality Checks:
+   - Validate metric completeness
+   - Check for stale data
+   - Monitor data freshness
+
+Troubleshooting:
+===============
+
+Common Issues:
+- Connection refused: Check Prometheus server status and network connectivity
+- Authentication failed: Verify API token and permissions
+- Query timeout: Optimize PromQL queries or increase timeout values
+- Missing metrics: Check exporter configuration and metric labels
+- High memory usage: Implement proper data cleanup and caching limits
+
+Debugging Tools:
+- Prometheus web UI for query testing
+- Browser network tab for API call inspection
+- Prometheus logs for server-side issues
+- Custom dashboard logging for client-side debugging

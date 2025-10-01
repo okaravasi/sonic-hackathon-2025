@@ -1,0 +1,198 @@
+SONiC Dashboard - Grafana Integration Documentation
+========================================================
+
+Overview:
+This SONiC dashboard is designed to integrate with Grafana for real-time monitoring data.
+The dashboard supports multiple network devices with device-specific endpoints.
+
+Grafana Integration Setup:
+=========================
+
+1. Grafana API Configuration:
+   - Ensure your Grafana instance has API access enabled
+   - Create a service account or API key with read permissions
+   - Configure CORS settings to allow requests from your dashboard domain
+
+2. Environment Variables:
+   Add these to your environment configuration:
+   
+   GRAFANA_BASE_URL=https://your-grafana-instance.com
+   GRAFANA_API_KEY=your_api_key_here
+   
+3. Device Endpoint Structure:
+   The dashboard expects Grafana endpoints following this pattern:
+   
+   Base URL: ${GRAFANA_BASE_URL}/api/datasources/proxy/1/api/v1/query_range
+   
+   Device-specific queries:
+   - Temperature: /devices/{DEVICE_NAME}/temperature
+   - Memory: /devices/{DEVICE_NAME}/memory
+   - CPU: /devices/{DEVICE_NAME}/cpu
+   - Processes: /devices/{DEVICE_NAME}/processes
+
+Expected Data Formats:
+=====================
+
+1. Temperature Data:
+   Endpoint: /devices/{DEVICE_NAME}/temperature
+   Expected JSON structure:
+   ```json
+   {
+     "data": {
+       "result": [
+         {
+           "metric": {"sensor": "temp1"},
+           "values": [
+             [1640995200, "45.2"],
+             [1640995260, "46.1"]
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+2. Memory Usage Data:
+   Endpoint: /devices/{DEVICE_NAME}/memory
+   Expected JSON structure:
+   ```json
+   {
+     "data": {
+       "result": [
+         {
+           "metric": {"type": "used"},
+           "values": [[1640995200, "2147483648"]]
+         },
+         {
+           "metric": {"type": "total"},
+           "values": [[1640995200, "8589934592"]]
+         }
+       ]
+     }
+   }
+   ```
+
+3. CPU Usage Data:
+   Endpoint: /devices/{DEVICE_NAME}/cpu
+   Expected JSON structure:
+   ```json
+   {
+     "data": {
+       "result": [
+         {
+           "metric": {"cpu": "avg"},
+           "values": [
+             [1640995200, "25.5"],
+             [1640995260, "27.2"]
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+4. Process Uptime Data:
+   Endpoint: /devices/{DEVICE_NAME}/processes
+   Expected JSON structure:
+   ```json
+   {
+     "data": {
+       "result": [
+         {
+           "metric": {"process": "syncd"},
+           "values": [[1640995200, "99.98"]]
+         },
+         {
+           "metric": {"process": "orchagent"},
+           "values": [[1640995200, "99.95"]]
+         }
+       ]
+     }
+   }
+   ```
+
+Implementation Steps:
+====================
+
+1. Update Chart Components:
+   - Modify each chart component to accept a `deviceName` prop
+   - Replace static data with API calls using fetch() or axios
+   - Add loading states and error handling
+   - Transform Grafana response data to chart-compatible format
+
+2. Data Fetching Service:
+   Create a service file (e.g., /services/grafanaService.ts) with:
+   ```typescript
+   const fetchDeviceData = async (deviceName: string, dataType: string) => {
+     const response = await fetch(
+       `${process.env.GRAFANA_BASE_URL}/devices/${deviceName}/${dataType}`,
+       {
+         headers: {
+           'Authorization': `Bearer ${process.env.GRAFANA_API_KEY}`,
+           'Content-Type': 'application/json'
+         }
+       }
+     );
+     return response.json();
+   };
+   ```
+
+3. Data Refresh:
+   - Implement automatic data refresh every 30 seconds
+   - Use React hooks (useEffect, useState) for state management
+   - Consider using React Query or SWR for caching and revalidation
+
+4. Error Handling:
+   - Add try-catch blocks around API calls
+   - Display user-friendly error messages
+   - Implement fallback to mock data if API is unavailable
+   - Add retry mechanisms for failed requests
+
+5. Device Management:
+   - Store available devices in configuration or fetch from API
+   - Validate device names before making API calls
+   - Handle device offline/online status
+
+Security Considerations:
+=======================
+
+1. API Keys:
+   - Store API keys securely (environment variables, not in code)
+   - Use service accounts with minimal required permissions
+   - Rotate API keys regularly
+
+2. CORS Configuration:
+   - Configure Grafana CORS settings properly
+   - Restrict allowed origins to your dashboard domain
+
+3. Rate Limiting:
+   - Implement client-side rate limiting
+   - Handle HTTP 429 responses gracefully
+   - Consider caching strategies to reduce API calls
+
+Testing:
+========
+
+1. Mock Data Testing:
+   - Test with mock data first
+   - Validate chart rendering with various data scenarios
+   - Test edge cases (empty data, malformed responses)
+
+2. Integration Testing:
+   - Test with real Grafana instance
+   - Verify all device endpoints return expected data
+   - Test device switching functionality
+
+Troubleshooting:
+===============
+
+Common Issues:
+- CORS errors: Check Grafana CORS configuration
+- 401 Unauthorized: Verify API key and permissions
+- Empty charts: Check data format and transformation logic
+- Slow loading: Implement proper loading states and optimize queries
+
+Monitoring:
+- Add logging for API calls and errors
+- Monitor API response times
+- Track data freshness and staleness

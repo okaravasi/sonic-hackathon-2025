@@ -24,7 +24,7 @@ type Device struct {
 }
 
 type DeviceDetails struct {
-	Temperature_sensor []string `json:"temperature_sensor"`
+	Temperature_sensor []string `json:"temperature_sensors"`
 	Containers  []string `json:"containers"`
 	Memory_types    []string `json:"memory_types"`
 	Os_version    string `json:"os_version"`
@@ -33,12 +33,31 @@ type DeviceDetails struct {
 }
 
 type RegisteredDevices struct {
-	Registered_devices []string `json:"registed_devices"`
+	Registered_devices []string `json:"registered_devices"`
 }
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s <device_list_file> <script_list_file> <server_port>\n", os.Args[0])
 	os.Exit(1)
+}
+
+func withCORS(next http.Handler) http.Handler {
+  return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    origin := r.Header.Get("Origin")
+    switch origin {
+    case "http://localhost:3000", "http://localhost:5173", "http://localhost:8080":
+      w.Header().Set("Access-Control-Allow-Origin", origin)
+      w.Header().Set("Vary", "Origin")
+      w.Header().Set("Access-Control-Allow-Credentials", "true")
+    }
+    w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    if r.Method == http.MethodOptions {
+      w.WriteHeader(http.StatusNoContent)
+      return
+    }
+    next.ServeHTTP(w, r)
+  })
 }
 
 func readCsvFile(file_path string) ([][]string, error) {
@@ -138,7 +157,7 @@ func main() {
 		} else {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}
-		device_details.Memory_types = []string{"total", "used", "free", "buff/cache", "avaible"}
+		device_details.Memory_types = []string{"free", "used", "shared", "cache"}
 		
 		cmd = `show version | grep 'SONiC Software Version' | cut -d':' -f 2`
 		getSonicVersionConn, err := client.NewSession()
@@ -153,9 +172,7 @@ func main() {
 			_ = getSensonrsConn.Close()
 			response := tmpStdout.String()
 			lines := strings.Split(response, "\n")
-			for _, line := range lines {
-				device_details.Os_version = line
-			}
+			device_details.Os_version = lines[0]
 		} else {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}
@@ -173,9 +190,7 @@ func main() {
 			_ = getSensonrsConn.Close()
 			response := tmpStdout.String()
 			lines := strings.Split(response, "\n")
-			for _, line := range lines {
-				device_details.Kernel_version = line
-			}
+			device_details.Kernel_version = lines[0]
 		} else {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}
@@ -341,6 +356,6 @@ func main() {
 		_, _ = w.Write([]byte("\n#EOF"))
 	})
 
-	log.Fatal(http.ListenAndServe(server_port, mux))
+	log.Fatal(http.ListenAndServe(server_port, withCORS(mux)))
 }
 
