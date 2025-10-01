@@ -1,0 +1,25 @@
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    network_mode: "host"
+  go_backend:
+    build:
+      context: .
+      dockerfile: Go_Dockerfile
+    container_name: go_backend
+    network_mode: "host"
+    working_dir: /app/go_backend
+    entrypoint: ["/app/go_backend/server"]
+    command:
+      - devices_list_file
+      - scrape_scripts/scripts_list
+      - "8080"
+    restart: unless-stopped

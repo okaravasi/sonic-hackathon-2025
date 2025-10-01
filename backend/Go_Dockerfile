@@ -1,0 +1,25 @@
+FROM golang:latest AS builder
+WORKDIR /app
+
+COPY go_backend/go.mod go_backend/go.sum ./go_backend/
+WORKDIR /app/go_backend
+RUN go mod download
+
+COPY go_backend/ /app/go_backend/
+
+RUN chmod +x scrape_scripts/*.sh || true
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o server ./main.go
+
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 appuser
+WORKDIR /app/go_backend
+
+COPY --from=builder /app/go_backend/server /app/go_backend/server
+COPY --from=builder /app/go_backend/devices_list_file /app/go_backend/devices_list_file
+COPY --from=builder /app/go_backend/scrape_scripts /app/go_backend/scrape_scripts
+
+USER appuser
+EXPOSE 8080
+ENTRYPOINT ["/app/go_backend/server"]
+
