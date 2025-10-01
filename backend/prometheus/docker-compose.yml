@@ -10,3 +10,4 @@ services:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --web.enable-lifecycle
+    network_mode: "host"

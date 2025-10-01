@@ -1,16 +1,9 @@
 global:
-  scrape_interval: 5s
+  scrape_interval: 25s
 
 scrape_configs:
   - job_name: "DEVICE_NAME"
     metrics_path: "/devices/DEVICE_NAME"
     static_configs:
-      - targets: ["172.17.0.1:SERVER_PORT"]
-  - job_name: "DEVICE_NAME1"
-    metrics_path: "/devices/DEVICE_NAME1"
-    static_configs:
-      - targets: ["172.17.0.1:SERVER_PORT"]
-  - job_name: "DEVICE_NAME1"
-    metrics_path: "/devices/DEVICE_NAME1"
-    static_configs:
-      - targets: ["172.17.0.1:SERVER_PORT"]
+      - targets: ["localhost:8080"]
+    scrape_timeout: 20s

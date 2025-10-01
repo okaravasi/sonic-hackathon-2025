@@ -4,11 +4,13 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"golang.org/x/crypto/ssh"
 	"github.com/pkg/sftp"
@@ -19,6 +21,19 @@ type Device struct {
 	Ip_address  string `json:"ip_address"`
 	Username    string `json:"username"`
 	Password    string `json:"password"`
+}
+
+type DeviceDetails struct {
+	Temperature_sensor []string `json:"temperature_sensor"`
+	Containers  []string `json:"containers"`
+	Memory_types    []string `json:"memory_types"`
+	Os_version    string `json:"os_version"`
+	Kernel_version    string `json:"kernel_version"`
+	Active_interfaces    string `json:"active_interfaces"`
+}
+
+type RegisteredDevices struct {
+	Registered_devices []string `json:"registed_devices"`
 }
 
 func usage() {
@@ -52,6 +67,132 @@ func main() {
 	server_port := ":" + os.Args[3]
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /details/{i}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("i") // path segment after /devices/
+		records, _ := readCsvFile(device_list_file)
+		devices := make(map[string]Device)
+		for i := 1; i < len(records); i++ {
+			devices[records[i][0]] = Device{
+				Device_name: records[i][0],
+				Ip_address:  records[i][1],
+				Username:    records[i][2],
+				Password:    records[i][3],
+			}
+		}
+		device, ok := devices[id]
+		if !ok {
+			fmt.Printf("The requested device: %s doesn't appear to be in the device_list_file: %s\n", id, device_list_file)
+			http.Error(w, "device not found", http.StatusNotFound)
+			return
+		}
+		var device_details DeviceDetails
+		cmd := `redis-cli -n 6 keys "*TEMPERATURE_INFO*" | cut -d'|' -f 2`
+		ssh_config := &ssh.ClientConfig{
+			User:            device.Username,
+			Auth:            []ssh.AuthMethod{ssh.Password(device.Password)},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		}
+
+		client, err := ssh.Dial("tcp", device.Ip_address+":22", ssh_config)
+		if err != nil {
+			fmt.Printf("Failed to dial %s: %v", device.Ip_address, err)
+			http.Error(w, "ssh dial failed", http.StatusBadGateway)
+			return
+		}
+		defer client.Close()
+		getSensonrsConn, err := client.NewSession()
+		if err == nil {
+			var tmpStderr bytes.Buffer
+			var tmpStdout bytes.Buffer
+			getSensonrsConn.Stderr = &tmpStderr
+			getSensonrsConn.Stdout = &tmpStdout
+			if rmErr := getSensonrsConn.Run(cmd); rmErr != nil {
+				fmt.Fprintf(w, "Failed to run %s:\nERROR: %s\n", cmd, tmpStderr.String())
+			}
+			_ = getSensonrsConn.Close()
+			response := tmpStdout.String()
+			lines := strings.Split(response, "\n")
+			for _, line := range lines {
+				device_details.Temperature_sensor = append(device_details.Temperature_sensor, line)
+			}
+		} else {
+			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+		}
+		
+		cmd = `docker ps -a --format "{{.Names}}"`
+		getContainerConn, err := client.NewSession()
+		if err == nil {
+			var tmpStderr bytes.Buffer
+			var tmpStdout bytes.Buffer
+			getContainerConn.Stderr = &tmpStderr
+			getContainerConn.Stdout = &tmpStdout
+			if rmErr := getContainerConn.Run(cmd); rmErr != nil {
+				fmt.Fprintf(w, "Failed to run %s:\nERROR: %s\n", cmd, tmpStderr.String())
+			}
+			_ = getSensonrsConn.Close()
+			response := tmpStdout.String()
+			lines := strings.Split(response, "\n")
+			for _, line := range lines {
+				device_details.Containers = append(device_details.Containers, line)
+			}
+		} else {
+			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+		}
+		device_details.Memory_types = []string{"total", "used", "free", "buff/cache", "avaible"}
+		
+		cmd = `show version | grep 'SONiC Software Version' | cut -d':' -f 2`
+		getSonicVersionConn, err := client.NewSession()
+		if err == nil {
+			var tmpStderr bytes.Buffer
+			var tmpStdout bytes.Buffer
+			getSonicVersionConn.Stderr = &tmpStderr
+			getSonicVersionConn.Stdout = &tmpStdout
+			if rmErr := getSonicVersionConn.Run(cmd); rmErr != nil {
+				fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+			}
+			_ = getSensonrsConn.Close()
+			response := tmpStdout.String()
+			lines := strings.Split(response, "\n")
+			for _, line := range lines {
+				device_details.Os_version = line
+			}
+		} else {
+			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+		}
+		
+		cmd = `show version | grep 'Kernel' | cut -d':' -f 2`
+		getKernelVersionConn, err := client.NewSession()
+		if err == nil {
+			var tmpStderr bytes.Buffer
+			var tmpStdout bytes.Buffer
+			getKernelVersionConn.Stderr = &tmpStderr
+			getKernelVersionConn.Stdout = &tmpStdout
+			if rmErr := getKernelVersionConn.Run(cmd); rmErr != nil {
+				fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+			}
+			_ = getSensonrsConn.Close()
+			response := tmpStdout.String()
+			lines := strings.Split(response, "\n")
+			for _, line := range lines {
+				device_details.Kernel_version = line
+			}
+		} else {
+			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(device_details)
+	})
+
+	mux.HandleFunc("GET /registered_devices", func(w http.ResponseWriter, r *http.Request) {
+		records, _ := readCsvFile(device_list_file)
+		var registered_devices RegisteredDevices
+		for i := 1; i < len(records); i++ {
+			registered_devices.Registered_devices = append(registered_devices.Registered_devices, records[i][0])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(registered_devices)
+
+	})
 	mux.HandleFunc("GET /devices/{i}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("i") // path segment after /devices/
 
@@ -125,7 +266,7 @@ func main() {
 			// Open local script for reading
 			src, err := os.Open(script_file)
 			if err != nil {
-				fmt.Fprintf(w, "Failed to open local script file: %s\nERROR: %v\n", script_file, err)
+				fmt.Printf("Failed to open local script file: %s\nERROR: %v\n", script_file, err)
 				continue
 			}
 
