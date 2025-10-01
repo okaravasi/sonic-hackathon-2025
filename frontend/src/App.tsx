@@ -78,7 +78,7 @@ export default function App() {
                   Select Device
                 </label>
                 <Select 
-                  value={selectedDevice?.id || ''} 
+                  value={selectedDevice || ''} 
                   onValueChange={(value) => 
                     setSelectedDevice(availableDevices.find(d => d.id === value) || null)
                   }
@@ -102,7 +102,7 @@ export default function App() {
             </div>
             <div className="text-right">
               <p className="text-sm text-muted-foreground">Current Device</p>
-              <p className="font-medium">{selectedDevice?.name || selectedDevice?.id || 'None selected'}</p>
+              <p className="font-medium">{selectedDevice || selectedDevice || 'None selected'}</p>
               {deviceDetails && (
                 <div className="text-xs text-muted-foreground space-y-1">
                   <p>OS: {deviceDetails.os_version}</p>

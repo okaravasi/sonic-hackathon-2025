@@ -88,8 +88,7 @@ export function CpuUsageChart({ deviceName }: CpuUsageChartProps) {
       <CardHeader>
         <CardTitle>CPU Usage - {deviceName}</CardTitle>
         <CardDescription>
-          Current: <span className={statusColor}>{currentUsage.toFixed(1)}%</span> - Average load across all cores • 
-          Prometheus: cpu_used{"{"}job="{deviceName}", cpu="main"{"}"}
+          Current: <span className={statusColor}>{currentUsage.toFixed(1)}%</span> - Average load across all cores 
         </CardDescription>
       </CardHeader>
       <CardContent>
