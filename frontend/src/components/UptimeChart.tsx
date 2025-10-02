@@ -136,44 +136,16 @@ export function UptimeChart({ deviceName, deviceDetails }: UptimeChartProps) {
       <CardContent>
         <div className="space-y-4">
           {/* Status indicators */}
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            {deviceDetails.containers.map((container) => (
+          <div className="grid grid-cols-1 gap-2 mb-4">
+            {deviceDetails.containers.filter((container) => container && container.trim().length > 0).map((container) => (
               <div key={container} className="flex items-center justify-between p-2 bg-muted rounded">
                 <span className="text-sm">{container}</span>
                 <Badge variant={containerStatus[container] ? 'default' : 'destructive'}>
-                  {containerStatus[container] ? 'Up' : 'Down'}
+                  {containerStatus[container] == 1 ? 'Up' : 'Down'}
                 </Badge>
               </div>
             ))}
           </div>
-          
-          {/* Container status over time chart */}
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={containerData} margin={{ top: 10, right: 10, left: 10, bottom: 5 }}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="time" />
-              <YAxis 
-                domain={[0, 1]} 
-                label={{ value: 'Status', angle: -90, position: 'insideLeft' }}
-                tickFormatter={(value) => value === 1 ? 'Up' : 'Down'}
-              />
-              <Tooltip 
-                formatter={(value, name) => [value === 1 ? 'Up' : 'Down', `${name} Container`]}
-              />
-              <Legend />
-              {deviceDetails.containers.map((container, index) => (
-                <Line
-                  key={container}
-                  type="stepAfter"
-                  dataKey={container}
-                  stroke={colors[index % colors.length]}
-                  strokeWidth={2}
-                  dot={{ r: 3 }}
-                  name={container}
-                />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
         </div>
       </CardContent>
     </Card>

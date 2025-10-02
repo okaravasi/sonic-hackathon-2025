@@ -23,6 +23,7 @@ export default function App() {
         setSelectedDevice(devices[0]);
       }
       setLoading(false);
+	  console.log("We have available devices", availableDevices)
     };
 
     fetchDevices();
@@ -78,10 +79,18 @@ export default function App() {
                   Select Device
                 </label>
                 <Select 
-                  value={selectedDevice || ''} 
-                  onValueChange={(value) => 
-                    setSelectedDevice(availableDevices.find(d => d.id === value) || null)
-                  }
+                  value={selectedDevice} 
+                  onValueChange={async (value) => { 
+                    const sel = availableDevices.find(d => d === value)
+					setSelectedDevice(sel);
+					if (sel) {
+        				const details = await apiService.getDeviceDetails(sel)
+						console.log(details)
+        				setDeviceDetails(details)
+					} else {
+        				setDeviceDetails(null)
+					}
+                  }}
                   disabled={loading || availableDevices.length === 0}
                 >
                   <SelectTrigger className="w-64">
@@ -89,9 +98,9 @@ export default function App() {
                   </SelectTrigger>
                   <SelectContent>
                     {availableDevices.map((device) => (
-                      <SelectItem key={device.id} value={device.id}>
+                      <SelectItem key={device} value={device}>
                         <div className="flex flex-col">
-                          <span>{device.name || device.id}</span>
+                          <span>{device}</span>
                           {device.ip && <span className="text-xs text-muted-foreground">{device.ip}</span>}
                         </div>
                       </SelectItem>

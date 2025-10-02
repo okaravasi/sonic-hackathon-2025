@@ -42,13 +42,10 @@ class ApiService {
 	  const res = await fetch('http://localhost:8080/registered_devices', { headers: { Accept: 'application/json' } });
 	  if (!res.ok) throw new Error(`HTTP ${res.status}`);
 	  const data = await res.json(); // single read
-      return data.registered_devices || [];
+      return data.registered_devices;
     } catch (error) {
       // Return mock data as fallback
-      return [
-        { id: 'ixr-7220-h5-32d-evt2-1', name: 'SONiC Switch 01', ip: '192.168.1.10' },
-        { id: 'sonic-sw-02', name: 'SONiC Switch 02', ip: '192.168.1.11' },
-      ];
+      return [];
     }
   }
 
