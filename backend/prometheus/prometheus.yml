@@ -1,9 +1,14 @@
 global:
   scrape_interval: 25s
-
+  scrape_timeout: 20s
 scrape_configs:
-  - job_name: "DEVICE_NAME"
-    metrics_path: "/devices/DEVICE_NAME"
-    static_configs:
-      - targets: ["localhost:8080"]
-    scrape_timeout: 20s
+  - job_name: 'devices'
+    http_sd_configs:
+      - url: 'http://localhost:8080/discovery'
+        refresh_interval: 30s
+    relabel_configs:
+      - source_labels: [path]
+        target_label: __metrics_path__
+      - source_labels: [path]
+        regex: "/devices/(.*)"
+        target_label: job

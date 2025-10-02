@@ -11,9 +11,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
-	"golang.org/x/crypto/ssh"
 	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 )
 
 type Device struct {
@@ -25,15 +26,20 @@ type Device struct {
 
 type DeviceDetails struct {
 	Temperature_sensor []string `json:"temperature_sensors"`
-	Containers  []string `json:"containers"`
-	Memory_types    []string `json:"memory_types"`
-	Os_version    string `json:"os_version"`
-	Kernel_version    string `json:"kernel_version"`
-	Active_interfaces    string `json:"active_interfaces"`
+	Containers         []string `json:"containers"`
+	Memory_types       []string `json:"memory_types"`
+	Os_version         string   `json:"os_version"`
+	Kernel_version     string   `json:"kernel_version"`
+	Active_interfaces  string   `json:"active_interfaces"`
 }
 
 type RegisteredDevices struct {
 	Registered_devices []string `json:"registered_devices"`
+}
+
+type DiscoveryDevices struct {
+	Discovery_devices	[]string			`json:"targets"`
+	Labels				map[string]string	`json:"labels"`
 }
 
 func usage() {
@@ -42,22 +48,22 @@ func usage() {
 }
 
 func withCORS(next http.Handler) http.Handler {
-  return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    origin := r.Header.Get("Origin")
-    switch origin {
-    case "http://localhost:3000", "http://localhost:5173", "http://localhost:8080":
-      w.Header().Set("Access-Control-Allow-Origin", origin)
-      w.Header().Set("Vary", "Origin")
-      w.Header().Set("Access-Control-Allow-Credentials", "true")
-    }
-    w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-    w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-    if r.Method == http.MethodOptions {
-      w.WriteHeader(http.StatusNoContent)
-      return
-    }
-    next.ServeHTTP(w, r)
-  })
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+		switch origin {
+		case "http://localhost:3000", "http://localhost:5173", "http://localhost:8080":
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func readCsvFile(file_path string) ([][]string, error) {
@@ -137,7 +143,7 @@ func main() {
 		} else {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}
-		
+
 		cmd = `docker ps -a --format "{{.Names}}"`
 		getContainerConn, err := client.NewSession()
 		if err == nil {
@@ -158,7 +164,7 @@ func main() {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}
 		device_details.Memory_types = []string{"free", "used", "shared", "cache"}
-		
+
 		cmd = `show version | grep 'SONiC Software Version' | cut -d':' -f 2`
 		getSonicVersionConn, err := client.NewSession()
 		if err == nil {
@@ -176,7 +182,7 @@ func main() {
 		} else {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}
-		
+
 		cmd = `show version | grep 'Kernel' | cut -d':' -f 2`
 		getKernelVersionConn, err := client.NewSession()
 		if err == nil {
@@ -206,6 +212,19 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(registered_devices)
+
+	})
+	mux.HandleFunc("GET /discovery", func(w http.ResponseWriter, r *http.Request) {
+		records, _ := readCsvFile(device_list_file)
+		prometheus_devices := make([]DiscoveryDevices, len(records) -1)
+		for i := 1; i < len(records); i++ {
+			discover_device := "localhost" + server_port 
+			prometheus_devices[i-1].Discovery_devices = append(prometheus_devices[i-1].Discovery_devices, discover_device)
+			prometheus_devices[i-1].Labels = make(map[string]string)
+			prometheus_devices[i-1].Labels["path"] = "/devices/" + records[i][0]
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(prometheus_devices)
 
 	})
 	mux.HandleFunc("GET /devices/{i}", func(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +266,6 @@ func main() {
 			http.Error(w, "failed to parse scripts list", http.StatusInternalServerError)
 			return
 		}
-
 		ssh_config := &ssh.ClientConfig{
 			User:            device.Username,
 			Auth:            []ssh.AuthMethod{ssh.Password(device.Password)},
@@ -262,100 +280,99 @@ func main() {
 		}
 		defer client.Close()
 
-		// Create SFTP client once, reuse for all uploads
-		sftpClient, err := sftp.NewClient(client)
-		if err != nil {
-			fmt.Printf("Failed to start SFTP subsystem: %v\n", err)
-			http.Error(w, "sftp init failed", http.StatusBadGateway)
-			return
-		}
-		defer sftpClient.Close()
-
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
-	outer_loop:
+		var wait_group sync.WaitGroup
 		for _, script_file := range script_files {
 			file_base := filepath.Base(script_file)
 			remotePath := "/tmp/" + file_base
+			wait_group.Add(1)
+			go func() {
+				defer wait_group.Done()
+				// Create SFTP client once, reuse for all uploads
+				sftpClient, err := sftp.NewClient(client)
+				if err != nil {
+					fmt.Printf("Failed to start SFTP subsystem: %v\n", err)
+					http.Error(w, "sftp init failed", http.StatusBadGateway)
+					return
+				}
+				defer sftpClient.Close()
+				// Open local script for reading
+				src, err := os.Open(script_file)
+				if err != nil {
+					fmt.Printf("Failed to open local script file: %s\nERROR: %v\n", script_file, err)
+					return
+				}
 
-			// Open local script for reading
-			src, err := os.Open(script_file)
-			if err != nil {
-				fmt.Printf("Failed to open local script file: %s\nERROR: %v\n", script_file, err)
-				continue
-			}
+				// Create remote file and copy content via SFTP
+				dst, err := sftpClient.Create(remotePath)
+				if err != nil {
+					src.Close()
+					fmt.Fprintf(w, "Failed to create remote script file: %s on host %s\nERROR: %v\n", remotePath, device.Device_name, err)
+					return
+				}
 
-			// Create remote file and copy content via SFTP
-			dst, err := sftpClient.Create(remotePath)
-			if err != nil {
-				src.Close()
-				fmt.Fprintf(w, "Failed to create remote script file: %s on host %s\nERROR: %v\n", remotePath, device.Device_name, err)
-				continue
-			}
+				_, copyErr := dst.ReadFrom(src)
+				closeErr1 := dst.Close()
+				closeErr2 := src.Close()
+				if copyErr != nil {
+					fmt.Fprintf(w, "Failed to upload script file to host %s\nERROR: %v\n", device.Device_name, copyErr)
+					_ = closeErr1
+					_ = closeErr2
+					return
+				}
+				if closeErr1 != nil || closeErr2 != nil {
+					// Non-fatal; report if needed
+				}
 
-			_, copyErr := dst.ReadFrom(src)
-			closeErr1 := dst.Close()
-			closeErr2 := src.Close()
-			if copyErr != nil {
-				fmt.Fprintf(w, "Failed to upload script file to host %s\nERROR: %v\n", device.Device_name, copyErr)
-				_ = closeErr1
-				_ = closeErr2
-				continue
-			}
-			if closeErr1 != nil || closeErr2 != nil {
-				// Non-fatal; report if needed
-			}
+				// Run the uploaded script with sudo bash
+				session, err := client.NewSession()
+				if err != nil {
+					fmt.Printf("Failed to create session: %v", err)
+					fmt.Fprintf(w, "Failed to create SSH session: %v\n", err)
+					return
+				}
 
-			// Run the uploaded script with sudo bash
-			session, err := client.NewSession()
-			if err != nil {
-				fmt.Printf("Failed to create session: %v", err)
-				fmt.Fprintf(w, "Failed to create SSH session: %v\n", err)
-				continue outer_loop
-			}
+				var stdout, stderr bytes.Buffer
+				session.Stdout = &stdout
+				session.Stderr = &stderr
 
-			var stdout, stderr bytes.Buffer
-			session.Stdout = &stdout
-			session.Stderr = &stderr
-
-			cmd := fmt.Sprintf(`sudo bash %s`, remotePath)
-			if err = session.Run(cmd); err != nil {
-				fmt.Fprintf(w, "Failed to run script_file %s:\nERROR: %s\n", remotePath, stderr.String())
+				cmd := fmt.Sprintf(`sudo bash %s`, remotePath)
+				if err = session.Run(cmd); err != nil {
+					fmt.Fprintf(w, "Failed to run script_file %s:\nERROR: %s\n", remotePath, stderr.String())
+					_ = session.Close()
+					rmSess, rmErr := client.NewSession()
+					if rmErr == nil {
+						_ = rmSess.Run(fmt.Sprintf(`sudo rm -f %s`, remotePath))
+						_ = rmSess.Close()
+					}
+					return
+				}
 				_ = session.Close()
-				// Attempt to remove the remote file even if run failed
-				rmSess, rmErr := client.NewSession()
-				if rmErr == nil {
-					_ = rmSess.Run(fmt.Sprintf(`sudo rm -f %s`, remotePath))
+
+				rmSess, err := client.NewSession()
+				if err == nil {
+					var rmStderr bytes.Buffer
+					rmSess.Stderr = &rmStderr
+					if rmErr := rmSess.Run(fmt.Sprintf(`sudo rm -f %s`, remotePath)); rmErr != nil {
+						fmt.Fprintf(w, "Failed to remove %s:\nERROR: %s\n", remotePath, rmStderr.String())
+					}
 					_ = rmSess.Close()
+				} else {
+					fmt.Fprintf(w, "Failed to create session to remove %s: %v\n", remotePath, err)
 				}
-				continue
-			}
-			_ = session.Close()
 
-			// Cleanup: remove remote script
-			rmSess, err := client.NewSession()
-			if err == nil {
-				var rmStderr bytes.Buffer
-				rmSess.Stderr = &rmStderr
-				if rmErr := rmSess.Run(fmt.Sprintf(`sudo rm -f %s`, remotePath)); rmErr != nil {
-					fmt.Fprintf(w, "Failed to remove %s:\nERROR: %s\n", remotePath, rmStderr.String())
+				// Write command stdout to HTTP response
+				if _, err := w.Write(stdout.Bytes()); err != nil {
+					fmt.Printf("Failed to send answer to requester\n")
+					return
 				}
-				_ = rmSess.Close()
-			} else {
-				fmt.Fprintf(w, "Failed to create session to remove %s: %v\n", remotePath, err)
-			}
-
-			// Write command stdout to HTTP response
-			if _, err := w.Write(stdout.Bytes()); err != nil {
-				fmt.Printf("Failed to send answer to requester\n")
-				continue
-			}
-			_, _ = w.Write([]byte("\n"))
+				_, _ = w.Write([]byte("\n"))
+			}()
 		}
-
-		_, _ = w.Write([]byte("\n#EOF"))
+		wait_group.Wait()
+		_, _ = w.Write([]byte("\n#EOF\n"))
 	})
 
 	log.Fatal(http.ListenAndServe(server_port, withCORS(mux)))
 }
-
