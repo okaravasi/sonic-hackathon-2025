@@ -12,4 +12,4 @@ RUN npm install
 COPY . .
 
 # Start the app
-CMD ["npm", "run", "dev"]
+CMD ["bash", "-c", "npm install && npm run dev"]
