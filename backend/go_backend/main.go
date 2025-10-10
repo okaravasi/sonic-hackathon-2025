@@ -31,6 +31,8 @@ type DeviceDetails struct {
 	Os_version         string   `json:"os_version"`
 	Kernel_version     string   `json:"kernel_version"`
 	Active_interfaces  string   `json:"active_interfaces"`
+	Sai_version string   `json:"sai_version"`
+	Asic_type			string   `json:"asic_type"`
 }
 
 type RegisteredDevices struct {
@@ -154,7 +156,7 @@ func main() {
 			if rmErr := getContainerConn.Run(cmd); rmErr != nil {
 				fmt.Fprintf(w, "Failed to run %s:\nERROR: %s\n", cmd, tmpStderr.String())
 			}
-			_ = getSensonrsConn.Close()
+			_ = getContainerConn.Close()
 			response := tmpStdout.String()
 			lines := strings.Split(response, "\n")
 			for _, line := range lines {
@@ -175,10 +177,28 @@ func main() {
 			if rmErr := getSonicVersionConn.Run(cmd); rmErr != nil {
 				fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 			}
-			_ = getSensonrsConn.Close()
+			_ = getSonicVersionConn.Close()
 			response := tmpStdout.String()
 			lines := strings.Split(response, "\n")
 			device_details.Os_version = lines[0]
+		} else {
+			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+		}
+
+		cmd = `show version | grep 'ASIC:' | cut -d':' -f 2`
+		getAsicTypeConn, err := client.NewSession()
+		if err == nil {
+			var tmpStderr bytes.Buffer
+			var tmpStdout bytes.Buffer
+			getAsicTypeConn.Stderr = &tmpStderr
+			getAsicTypeConn.Stdout = &tmpStdout
+			if rmErr := getAsicTypeConn.Run(cmd); rmErr != nil {
+				fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+			}
+			_ = getAsicTypeConn.Close()
+			response := tmpStdout.String()
+			lines := strings.Split(response, "\n")
+			device_details.Asic_type = lines[0]
 		} else {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}
@@ -193,10 +213,28 @@ func main() {
 			if rmErr := getKernelVersionConn.Run(cmd); rmErr != nil {
 				fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 			}
-			_ = getSensonrsConn.Close()
+			_ = getKernelVersionConn.Close()
 			response := tmpStdout.String()
 			lines := strings.Split(response, "\n")
 			device_details.Kernel_version = lines[0]
+		} else {
+			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+		}
+
+		cmd = `docker exec syncd bash -c "dpkg -l | grep sai" | head -1 | awk '{print $2" "$3}'`
+		getSaiVersionConn, err := client.NewSession()
+		if err == nil {
+			var tmpStderr bytes.Buffer
+			var tmpStdout bytes.Buffer
+			getSaiVersionConn.Stderr = &tmpStderr
+			getSaiVersionConn.Stdout = &tmpStdout
+			if rmErr := getSaiVersionConn.Run(cmd); rmErr != nil {
+				fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
+			}
+			_ = getSaiVersionConn.Close()
+			response := tmpStdout.String()
+			lines := strings.Split(response, "\n")
+			device_details.Sai_version = lines[0]
 		} else {
 			fmt.Fprintf(w, "Failed to create session to run %s: %v\n", cmd, err)
 		}

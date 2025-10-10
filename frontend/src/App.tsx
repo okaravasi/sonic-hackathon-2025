@@ -115,7 +115,8 @@ export default function App() {
               {deviceDetails && (
                 <div className="text-xs text-muted-foreground space-y-1">
                   <p>OS: {deviceDetails.os_version}</p>
-                  <p>Interfaces: {deviceDetails.active_interfaces}</p>
+                  <p>ASIC type: {deviceDetails.asic_type}</p>
+                  <p>SAI version: {deviceDetails.sai_version}</p>
                 </div>
               )}
             </div>
